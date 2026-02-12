@@ -1,7 +1,7 @@
 - [X] The TCP Foundation: Criando sockets, entendendo bind/listen/accept e syscalls.
-- [ ] Memory & Buffering: Leitura segura de streams, zero-copy parsing (onde possível).
-- [ ] Protocol Parsing (HTTP 1.1): Transformando bytes brutos em Struct Request sem bibliotecas prontas.
-- [ ] Concurrency Models: Migrando de Threads (1:1) para Non-blocking I/O (Tokio/Epoll) – O ponto de virada de performance.
+- [X] Memory & Buffering: Leitura segura de streams, zero-copy parsing (onde possível).
+- [X] Protocol Parsing (HTTP 1.1): Transformando bytes brutos em Struct Request sem bibliotecas prontas.
+- [X] Concurrency Models: Migrando de Threads (1:1) para Non-blocking I/O (Tokio/Epoll) – O ponto de virada de performance.
 - [ ] The Middleman (Reverse Proxy): Conectando ao Upstream e repassando dados.
 - [ ] Inspection Engine: Validação de protocolo e assinaturas estáticas.
 - [ ] Rate Limiting: Algoritmos de controle de fluxo (Token Bucket).
