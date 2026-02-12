@@ -1,10 +1,11 @@
 use std::collections::HashMap;
-use tokio::io::{AsyncReadExt, AsyncWriteExt}; // Traits para read/write assíncronos
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 const SERVER_ADDR: &str = "127.0.0.1:4000";
 const SCRATCH_BUFFER_SIZE: usize = 512;
 const MAX_HEADER_SIZE: usize = 8192;
+const UPSTREAM_ADDR: &str = "127.0.0.1:8000";
 
 #[derive(Debug)]
 struct Request {
@@ -51,64 +52,69 @@ impl Request {
     }
 }
 
-async fn handle_client(mut stream: TcpStream) {
-    let peer_addr = match stream.peer_addr() {
+async fn handle_client(mut client_stream: TcpStream) {
+    let peer_addr = match client_stream.peer_addr() {
         Ok(addr) => addr,
         Err(_) => return,
     };
 
     let mut accumulator: Vec<u8> = Vec::new();
     let mut buffer = [0u8; 1024];
+    let request_str: String;
 
     loop {
-        match stream.read(&mut buffer).await {
-            Ok(0) => break,
-            Ok(n) => {
-                if accumulator.len() + n > MAX_HEADER_SIZE {
-                    return;
-                }
+        let n = match client_stream.read(&mut buffer).await {
+            Ok(0) => return,
+            Ok(n) => n,
+            Err(_) => return,
+        };
 
-                accumulator.extend_from_slice(&buffer[..n]);
+        if accumulator.len() + n > MAX_HEADER_SIZE {
+            return;
+        }
+        accumulator.extend_from_slice(&buffer[..n]);
 
-                if let Some(i) = accumulator.windows(4).position(|w| w == b"\r\n\r\n") {
-                    let header_len = i + 4;
-                    let request_str = String::from_utf8_lossy(&accumulator[..header_len]);
+        if let Some(i) = accumulator.windows(4).position(|w| w == b"\r\n\r\n") {
+            let header_len = i + 4;
+            request_str = String::from_utf8_lossy(&accumulator[..header_len]).to_string();
+            break;
+        }
+    }
 
-                    match Request::parse(&request_str) {
-                        Ok(req) => {
-                            println!(
-                                "[DEBUG] Async Req from {}: {} {}",
-                                peer_addr, req.method, req.path
-                            );
-
-                            if req.path.contains("DROP") || req.body.contains("DROP") {
-                                println!("[BLOCK] {} - SQLi detected", peer_addr);
-                                let _ = stream
-                                    .write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nBLOCK: SQLi")
-                                    .await;
-                                break;
-                            }
-
-                            if let Some(ua) = req.headers.get("User-Agent") {
-                                if ua.contains("sqlmap") {
-                                    let _ = stream
-                                        .write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nBLOCK: Bot")
-                                        .await;
-                                    break;
-                                }
-                            }
-
-                            let response =
-                                "HTTP/1.1 200 OK\r\nContent-Length: 15\r\n\r\nAsync Oblivion!";
-                            // write_all().await garante que tudo foi enviado sem bloquear
-                            let _ = stream.write_all(response.as_bytes()).await;
-                            break;
-                        }
-                        Err(_) => break,
-                    }
-                }
+    match Request::parse(&request_str) {
+        Ok(req) => {
+            if req.path.contains("DROP") || req.body.contains("DROP") {
+                println!("[BLOCK] {} - Malicious Payload", peer_addr);
+                let _ = client_stream
+                    .write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nBLOCK: WAF")
+                    .await;
+                return;
             }
-            Err(_) => break,
+
+            println!("[PROXY] {} -> {} {}", peer_addr, req.method, req.path);
+        }
+        Err(_) => return,
+    }
+
+    match TcpStream::connect(UPSTREAM_ADDR).await {
+        Ok(mut upstream_stream) => {
+            if let Err(_) = upstream_stream.write_all(&accumulator).await {
+                return;
+            }
+
+            let (mut client_read, mut client_write) = client_stream.split();
+            let (mut upstream_read, mut upstream_write) = upstream_stream.split();
+
+            let client_to_upstream = tokio::io::copy(&mut client_read, &mut upstream_write);
+            let upstream_to_client = tokio::io::copy(&mut upstream_read, &mut client_write);
+
+            let _ = tokio::try_join!(client_to_upstream, upstream_to_client);
+        }
+        Err(e) => {
+            eprintln!("[ERROR] Upstream Down: {}", e);
+            let _ = client_stream
+                .write_all(b"HTTP/1.1 502 Bad Gateway...")
+                .await;
         }
     }
 }
@@ -156,7 +162,7 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
         client.write_all(b"alhost\r\n\r\n").unwrap();
 
-        let mut buffer = [0u8; 512];
+        let mut buffer = [0u8; SCRATCH_BUFFER_SIZE];
         let n = client.read(&mut buffer).unwrap();
         let response = String::from_utf8_lossy(&buffer[..n]);
 
