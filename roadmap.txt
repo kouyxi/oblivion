@@ -6,10 +6,10 @@
 - [X] Inspection Engine: Validação de protocolo e assinaturas estáticas.
 - [X] Rate Limiting: Algoritmos de controle de fluxo (Token Bucket).
 - [X] Logging & Observability: Métricas sem travar a thread principal.
-- [ ] Edge Cases & Attack Vectors:
-- [ ] Slow Loris: Matando conexões lentas.
-- [ ] Request Smuggling: Normalização de CL/TE.
-- [ ] Oversized Payloads: Proteção contra DoS de memória.
+- [X] Edge Cases & Attack Vectors:
+- [X] Slow Loris: Matando conexões lentas.
+- [X] Request Smuggling: Normalização de CL/TE.
+- [X] Oversized Payloads: Proteção contra DoS de memória.
 - [ ] Benchmarking & Profiling:
 - [ ] Stress test com wrk.
 - [ ] Flamegraphs (CPU hotpaths).
