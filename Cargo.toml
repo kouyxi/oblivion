@@ -8,3 +8,6 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 percent-encoding = "2.3"
+tokio-rustls = "0.24"
+rustls = "0.21"     
+rustls-pemfile = "1.0"

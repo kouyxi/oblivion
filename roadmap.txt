@@ -10,10 +10,9 @@
 - [X] Slow Loris: Matando conexões lentas.
 - [X] Request Smuggling: Normalização de CL/TE.
 - [X] Oversized Payloads: Proteção contra DoS de memória.
-- [ ] Benchmarking & Profiling:
-- [ ] Stress test com wrk.
+- [X] Benchmarking & Profiling:
+- [X] Stress test com wrk.
 - [ ] Flamegraphs (CPU hotpaths).
-- [ ] Comparação vs Nginx.
 
 - [ ] Mutex Contention: Como usamos um único Mutex para o mapa todo, se tivermos 100 threads tentando checar IPs ao mesmo tempo, elas vão fazer fila.
 Solução para Escala Gigante: Sharding. Criar 16 HashMaps (Vec<Mutex<HashMap>>) e escolher qual usar baseado no hash do IP (ip_hash % 16). Isso reduz a disputa pelo lock em 16x. Para o Oblivion atual, um único Mutex segura tranquilamente 50k reqs/s.

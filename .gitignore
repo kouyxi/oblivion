@@ -1,1 +1,15 @@
 /target
+
+*.pem
+key.pem
+cert.pem
+
+flamegraph.svg
+perf.data
+perf.data.old
+
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*~
