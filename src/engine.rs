@@ -11,6 +11,7 @@ pub struct WafEngine {
     sqli_signatures: Vec<&'static str>,
     xss_signatures: Vec<&'static str>,
     traversal_signatures: Vec<&'static str>,
+    allowed_methods: Vec<&'static str>,
 }
 
 impl WafEngine {
@@ -44,10 +45,15 @@ impl WafEngine {
                 ".env",
                 "config.php",
             ],
+            allowed_methods: vec!["GET", "POST", "HEAD"],
         }
     }
 
     pub fn inspect(&self, req: &Request) -> Verdict {
+        if !self.allowed_methods.contains(&req.method.as_str()) {
+            return Verdict::Block(format!("Method Not Allowed: {}", req.method));
+        }
+
         if req.headers.contains_key("Content-Length")
             && req.headers.contains_key("Transfer-Encoding")
         {
@@ -58,13 +64,16 @@ impl WafEngine {
             return Verdict::Block("Protocol Anomaly: Missing Host Header".to_string());
         }
 
-        let normalize = |input: &str| -> String {
+        let normalize = |input: &str| -> Result<String, String> {
             let mut decoded = input.to_string();
             let mut loop_count = 0;
 
             loop {
-                let with_spaces = decoded.replace('+', " ");
+                if decoded.contains('\0') {
+                    return Err("Null Byte Injection Detected".to_string());
+                }
 
+                let with_spaces = decoded.replace('+', " ");
                 match percent_decode_str(&with_spaces).decode_utf8() {
                     Ok(d) => {
                         let new_val = d.to_string();
@@ -77,11 +86,18 @@ impl WafEngine {
                 }
                 loop_count += 1;
             }
-            decoded.to_lowercase()
+            Ok(decoded.to_lowercase())
         };
 
-        let clean_path = normalize(&req.path);
-        let clean_body = normalize(&req.body);
+        let clean_path = match normalize(&req.path) {
+            Ok(s) => s,
+            Err(reason) => return Verdict::Block(reason),
+        };
+
+        let clean_body = match normalize(&req.body) {
+            Ok(s) => s,
+            Err(reason) => return Verdict::Block(reason),
+        };
 
         if clean_path.contains('\r') || clean_path.contains('\n') {
             return Verdict::Block("CRLF Injection Detected".to_string());
