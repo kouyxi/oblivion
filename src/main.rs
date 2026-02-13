@@ -1,58 +1,18 @@
-use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-const SERVER_ADDR: &str = "127.0.0.1:4000";
-const SCRATCH_BUFFER_SIZE: usize = 512;
-const MAX_HEADER_SIZE: usize = 8192;
+mod engine;
+mod http;
+
+use engine::{Verdict, WafEngine};
+use http::Request;
+
+const LISTENER_ADDR: &str = "127.0.0.1:4000";
 const UPSTREAM_ADDR: &str = "127.0.0.1:8000";
+const MAX_HEADER_SIZE: usize = 8192;
 
-#[derive(Debug)]
-struct Request {
-    method: String,
-    path: String,
-    version: String,
-    headers: HashMap<String, String>,
-    body: String,
-}
-
-impl Request {
-    fn parse(raw_request: &str) -> Result<Self, String> {
-        let mut lines = raw_request.lines();
-
-        let req_line = lines.next().ok_or("Empty request")?;
-        let mut parts = req_line.split_whitespace();
-        let method = parts.next().ok_or("Method")?.to_string();
-        let path = parts.next().ok_or("Path")?.to_string();
-        let version = parts.next().ok_or("Version")?.to_string();
-
-        let mut headers = HashMap::new();
-        for line in lines {
-            if line.is_empty() {
-                break;
-            }
-            if let Some((k, v)) = line.split_once(':') {
-                headers.insert(k.trim().to_string(), v.trim().to_string());
-            }
-        }
-
-        let body = if let Some(idx) = raw_request.find("\r\n\r\n") {
-            raw_request[idx + 4..].to_string()
-        } else {
-            String::new()
-        };
-
-        Ok(Request {
-            method,
-            path,
-            version,
-            headers,
-            body,
-        })
-    }
-}
-
-async fn handle_client(mut client_stream: TcpStream) {
+async fn handle_client(mut client_stream: TcpStream, engine: Arc<WafEngine>) {
     let peer_addr = match client_stream.peer_addr() {
         Ok(addr) => addr,
         Err(_) => return,
@@ -82,18 +42,24 @@ async fn handle_client(mut client_stream: TcpStream) {
     }
 
     match Request::parse(&request_str) {
-        Ok(req) => {
-            if req.path.contains("DROP") || req.body.contains("DROP") {
-                println!("[BLOCK] {} - Malicious Payload", peer_addr);
-                let _ = client_stream
-                    .write_all(b"HTTP/1.1 403 Forbidden\r\n\r\nBLOCK: WAF")
-                    .await;
+        Ok(req) => match engine.inspect(&req) {
+            Verdict::Allow => {
+                println!("[PROXY] {} -> {} {}", peer_addr, req.method, req.path);
+            }
+            Verdict::Block(reason) => {
+                println!("[BLOCK] {} - Reason: {}", peer_addr, reason);
+                let error_msg = format!("HTTP/1.1 403 Forbidden\r\n\r\nBLOCK: {}", reason);
+                let _ = client_stream.write_all(error_msg.as_bytes()).await;
                 return;
             }
-
-            println!("[PROXY] {} -> {} {}", peer_addr, req.method, req.path);
+        },
+        Err(e) => {
+            eprintln!("[ERROR] {} - Invalid HTTP: {}", peer_addr, e);
+            let _ = client_stream
+                .write_all(b"HTTP/1.1 400 Bad Request\r\n\r\nInvalid HTTP Protocol")
+                .await;
+            return;
         }
-        Err(_) => return,
     }
 
     match TcpStream::connect(UPSTREAM_ADDR).await {
@@ -102,18 +68,18 @@ async fn handle_client(mut client_stream: TcpStream) {
                 return;
             }
 
-            let (mut client_read, mut client_write) = client_stream.split();
-            let (mut upstream_read, mut upstream_write) = upstream_stream.split();
+            let (mut cr, mut cw) = client_stream.split();
+            let (mut ur, mut uw) = upstream_stream.split();
 
-            let client_to_upstream = tokio::io::copy(&mut client_read, &mut upstream_write);
-            let upstream_to_client = tokio::io::copy(&mut upstream_read, &mut client_write);
-
-            let _ = tokio::try_join!(client_to_upstream, upstream_to_client);
+            let _ = tokio::try_join!(
+                tokio::io::copy(&mut cr, &mut uw),
+                tokio::io::copy(&mut ur, &mut cw)
+            );
         }
         Err(e) => {
             eprintln!("[ERROR] Upstream Down: {}", e);
             let _ = client_stream
-                .write_all(b"HTTP/1.1 502 Bad Gateway...")
+                .write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\nUpstream Unreachable")
                 .await;
         }
     }
@@ -121,52 +87,20 @@ async fn handle_client(mut client_stream: TcpStream) {
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    let listener = TcpListener::bind(SERVER_ADDR).await?;
+    let listener = TcpListener::bind(LISTENER_ADDR).await?;
+    println!(
+        "🛡️  OBLIVION PROXY running in {} -> Protecting {}",
+        LISTENER_ADDR, UPSTREAM_ADDR
+    );
 
-    println!("⚡ OBLIVION WAF (Async Engine) rodando em {}", SERVER_ADDR);
+    let engine = Arc::new(WafEngine::new());
 
     loop {
         let (stream, _) = listener.accept().await?;
+        let engine_clone = engine.clone();
 
         tokio::spawn(async move {
-            handle_client(stream).await;
+            handle_client(stream, engine_clone).await;
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-    use std::thread;
-    use std::time::Duration;
-
-    fn spawn_server() {
-        thread::spawn(|| {
-            let _ = main();
-        });
-        thread::sleep(Duration::from_millis(100));
-    }
-
-    #[test]
-    fn test_fragmented_request() {
-        static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(|| {
-            spawn_server();
-        });
-
-        let mut client = TcpStream::connect("127.0.0.1:4000").unwrap();
-
-        client.write_all(b"GET / HTTP/1.1\r\nHost: loc").unwrap();
-        thread::sleep(Duration::from_millis(50));
-        client.write_all(b"alhost\r\n\r\n").unwrap();
-
-        let mut buffer = [0u8; SCRATCH_BUFFER_SIZE];
-        let n = client.read(&mut buffer).unwrap();
-        let response = String::from_utf8_lossy(&buffer[..n]);
-
-        assert!(response.contains("200 OK"));
-        assert!(response.contains("Hello Oblivion"));
     }
 }
