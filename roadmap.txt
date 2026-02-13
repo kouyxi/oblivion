@@ -4,7 +4,7 @@
 - [X] Concurrency Models: Migrando de Threads (1:1) para Non-blocking I/O (Tokio/Epoll) – O ponto de virada de performance.
 - [X] The Middleman (Reverse Proxy): Conectando ao Upstream e repassando dados.
 - [X] Inspection Engine: Validação de protocolo e assinaturas estáticas.
-- [ ] Rate Limiting: Algoritmos de controle de fluxo (Token Bucket).
+- [X] Rate Limiting: Algoritmos de controle de fluxo (Token Bucket).
 - [ ] Logging & Observability: Métricas sem travar a thread principal.
 - [ ] Edge Cases & Attack Vectors:
 - [ ] Slow Loris: Matando conexões lentas.
