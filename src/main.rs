@@ -1,6 +1,8 @@
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time::timeout;
 use tracing::{debug, error, info, instrument, warn};
 use tracing_subscriber;
 
@@ -15,6 +17,9 @@ use limiter::RateLimiter;
 const LISTENER_ADDR: &str = "127.0.0.1:4000";
 const UPSTREAM_ADDR: &str = "127.0.0.1:8000";
 const MAX_HEADER_SIZE: usize = 8192;
+const CLIENT_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
+const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_BODY_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
 
 #[instrument(skip(client_stream, engine, limiter), fields(peer_addr, method, path))]
 async fn handle_client(
@@ -47,13 +52,21 @@ async fn handle_client(
     let request_str: String;
 
     loop {
-        let n = match client_stream.read(&mut buffer).await {
-            Ok(0) => return,
-            Ok(n) => n,
-            Err(e) => {
-                debug!("Socket read error: {}", e);
-                return;
+        let read_result = timeout(CLIENT_HEADER_TIMEOUT, client_stream.read(&mut buffer)).await;
+
+        let n = match read_result {
+            Err(_) => {
+                warn!("Connection dropped: Client header timeout (Slowloris protection)");
+                return; // Corta a conexão imediatamente
             }
+            Ok(io_result) => match io_result {
+                Ok(0) => return, // Cliente fechou conexão
+                Ok(n) => n,
+                Err(e) => {
+                    debug!("Socket read error: {}", e);
+                    return;
+                }
+            },
         };
 
         if accumulator.len() + n > MAX_HEADER_SIZE {
@@ -95,31 +108,39 @@ async fn handle_client(
         }
     }
 
-    match TcpStream::connect(UPSTREAM_ADDR).await {
-        Ok(mut upstream_stream) => {
-            if let Err(e) = upstream_stream.write_all(&accumulator).await {
-                error!(error = %e, "Failed to send headers to upstream");
-                return;
-            }
+    let connect_result = timeout(UPSTREAM_CONNECT_TIMEOUT, TcpStream::connect(UPSTREAM_ADDR)).await;
 
-            let (mut cr, mut cw) = client_stream.split();
-            let (mut ur, mut uw) = upstream_stream.split();
-
-            let result = tokio::try_join!(
-                tokio::io::copy(&mut cr, &mut uw),
-                tokio::io::copy(&mut ur, &mut cw)
-            );
-
-            if let Err(e) = result {
-                debug!("Tunnel closed with error: {}", e);
-            }
-        }
-        Err(e) => {
-            error!(upstream = UPSTREAM_ADDR, error = %e, "Upstream is DOWN");
+    match connect_result {
+        Err(_) => {
+            error!(upstream = UPSTREAM_ADDR, "Upstream connection timeout");
             let _ = client_stream
-                .write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\nUpstream Unreachable")
+                .write_all(b"HTTP/1.1 504 Gateway Timeout\r\n\r\nUpstream Unresponsive")
                 .await;
         }
+        Ok(io_result) => match io_result {
+            Ok(mut upstream_stream) => {
+                if let Err(e) = upstream_stream.write_all(&accumulator).await {
+                    error!(error = %e, "Failed to send headers to upstream");
+                    return;
+                }
+
+                let (mut client_read, mut client_write) = client_stream.split();
+                let (mut upstream_read, mut upstream_write) = upstream_stream.split();
+
+                let mut client_limited = client_read.take(MAX_BODY_SIZE);
+
+                let result = tokio::try_join!(
+                    tokio::io::copy(&mut client_limited, &mut upstream_write),
+                    tokio::io::copy(&mut upstream_read, &mut client_write)
+                );
+            }
+            Err(e) => {
+                error!(upstream = UPSTREAM_ADDR, error = %e, "Upstream is DOWN");
+                let _ = client_stream
+                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\nUpstream Unreachable")
+                    .await;
+            }
+        },
     }
 }
 

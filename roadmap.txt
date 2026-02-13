@@ -5,7 +5,7 @@
 - [X] The Middleman (Reverse Proxy): Conectando ao Upstream e repassando dados.
 - [X] Inspection Engine: Validação de protocolo e assinaturas estáticas.
 - [X] Rate Limiting: Algoritmos de controle de fluxo (Token Bucket).
-- [ ] Logging & Observability: Métricas sem travar a thread principal.
+- [X] Logging & Observability: Métricas sem travar a thread principal.
 - [ ] Edge Cases & Attack Vectors:
 - [ ] Slow Loris: Matando conexões lentas.
 - [ ] Request Smuggling: Normalização de CL/TE.
