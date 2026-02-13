@@ -52,3 +52,31 @@ Você precisa do Rust instalado e, para HTTPS, gerar os certificados locais:
 # Gera chave e certificado auto-assinado
 openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=localhost"
 ```
+
+Subindo o Monstro
+Recomendo rodar em modo release pra ver a velocidade real (o modo debug é lento pra criptografia).
+
+```Bash
+# Otimizado e com logs apenas de erro/info
+RUST_LOG=info cargo run --release
+```
+
+O proxy vai subir em https://0.0.0.0:4433 e repassar o tráfego para 127.0.0.1:8000.
+
+---
+
+## 📂 Estrutura do Código
+
+src/main.rs: O orquestrador. Gerencia TCP, TLS e o Loop principal.
+
+src/engine.rs: Lógica de segurança (Normalização e Assinaturas).
+
+src/limiter.rs: Implementação do Token Bucket com Sharding.
+
+src/http.rs: Parser manual de HTTP/1.1 (Zero dependency parser).
+
+---
+
+## 📊 Performance
+
+Em benchmarks locais (wrk), o Oblivion processou ~11.500 req/s bloqueando ataques e ~22.000 req/s em tráfego limpo, adicionando menos de 1ms de latência ao backend.
