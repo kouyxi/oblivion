@@ -1,4 +1,4 @@
-use crate::http::Request; // Importa a struct do outro arquivo
+use crate::http::Request;
 
 #[derive(Debug)]
 pub enum Verdict {

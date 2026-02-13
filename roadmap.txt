@@ -3,7 +3,7 @@
 - [X] Protocol Parsing (HTTP 1.1): Transformando bytes brutos em Struct Request sem bibliotecas prontas.
 - [X] Concurrency Models: Migrando de Threads (1:1) para Non-blocking I/O (Tokio/Epoll) – O ponto de virada de performance.
 - [X] The Middleman (Reverse Proxy): Conectando ao Upstream e repassando dados.
-- [ ] Inspection Engine: Validação de protocolo e assinaturas estáticas.
+- [X] Inspection Engine: Validação de protocolo e assinaturas estáticas.
 - [ ] Rate Limiting: Algoritmos de controle de fluxo (Token Bucket).
 - [ ] Logging & Observability: Métricas sem travar a thread principal.
 - [ ] Edge Cases & Attack Vectors:
@@ -14,3 +14,10 @@
 - [ ] Stress test com wrk.
 - [ ] Flamegraphs (CPU hotpaths).
 - [ ] Comparação vs Nginx.
+
+- [ ] Mutex Contention: Como usamos um único Mutex para o mapa todo, se tivermos 100 threads tentando checar IPs ao mesmo tempo, elas vão fazer fila.
+Solução para Escala Gigante: Sharding. Criar 16 HashMaps (Vec<Mutex<HashMap>>) e escolher qual usar baseado no hash do IP (ip_hash % 16). Isso reduz a disputa pelo lock em 16x. Para o Oblivion atual, um único Mutex segura tranquilamente 50k reqs/s.
+
+- [ ] Memory Leak (Garbage Collection):
+O código atual nunca remove IPs do mapa. Se um IP entra, cria o balde e nunca mais volta, aqueles 24 bytes de RAM ficam ocupados para sempre.
+Solução: Uma thread separada que roda a cada minuto: limiter.cleanup(), removendo chaves onde last_update > 10 minutos.

@@ -4,19 +4,35 @@ use tokio::net::{TcpListener, TcpStream};
 
 mod engine;
 mod http;
+mod limiter;
 
 use engine::{Verdict, WafEngine};
 use http::Request;
+use limiter::RateLimiter;
 
 const LISTENER_ADDR: &str = "127.0.0.1:4000";
 const UPSTREAM_ADDR: &str = "127.0.0.1:8000";
 const MAX_HEADER_SIZE: usize = 8192;
 
-async fn handle_client(mut client_stream: TcpStream, engine: Arc<WafEngine>) {
+async fn handle_client(
+    mut client_stream: TcpStream,
+    engine: Arc<WafEngine>,
+    limiter: Arc<RateLimiter>,
+) {
     let peer_addr = match client_stream.peer_addr() {
         Ok(addr) => addr,
         Err(_) => return,
     };
+
+    if !limiter.check(peer_addr.ip()) {
+        println!("[LIMIT] {} - Rate limit exceeded", peer_addr);
+        let _ = client_stream
+            .write_all(
+                b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\n\r\nRate Limit Exceeded",
+            )
+            .await;
+        return;
+    }
 
     let mut accumulator: Vec<u8> = Vec::new();
     let mut buffer = [0u8; 1024];
@@ -72,8 +88,8 @@ async fn handle_client(mut client_stream: TcpStream, engine: Arc<WafEngine>) {
             let (mut ur, mut uw) = upstream_stream.split();
 
             let _ = tokio::try_join!(
-                tokio::io::copy(&mut cr, &mut uw),
-                tokio::io::copy(&mut ur, &mut cw)
+                tokio::io::copy(&mut cr, &mut uw), // Cliente -> Upstream
+                tokio::io::copy(&mut ur, &mut cw)  // Upstream -> Cliente
             );
         }
         Err(e) => {
@@ -95,12 +111,16 @@ async fn main() -> std::io::Result<()> {
 
     let engine = Arc::new(WafEngine::new());
 
+    let limiter = Arc::new(RateLimiter::new(5.0, 10.0));
+
     loop {
         let (stream, _) = listener.accept().await?;
+
         let engine_clone = engine.clone();
+        let limiter_clone = limiter.clone();
 
         tokio::spawn(async move {
-            handle_client(stream, engine_clone).await;
+            handle_client(stream, engine_clone, limiter_clone).await;
         });
     }
 }
